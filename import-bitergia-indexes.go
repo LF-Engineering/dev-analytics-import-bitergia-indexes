@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"runtime"
 	"runtime/debug"
+	"strconv"
 	"time"
 )
 
@@ -151,11 +154,78 @@ func fatalf(f string, a ...interface{}) {
 	fatalOnError(fmt.Errorf(f, a...))
 }
 
+func getThreadsNum() int {
+	// Use environment variable to have singlethreaded version
+	st := os.Getenv("ST") != ""
+	if st {
+		return 1
+	}
+	nCPUs := 0
+	if os.Getenv("NCPUS") != "" {
+		n, err := strconv.Atoi(os.Getenv("NCPUS"))
+		fatalOnError(err)
+		if n > 0 {
+			nCPUs = n
+		}
+	}
+	if nCPUs > 0 {
+		n := runtime.NumCPU()
+		if nCPUs > n {
+			nCPUs = n
+		}
+		runtime.GOMAXPROCS(nCPUs)
+		return nCPUs
+	}
+	nCPUs = runtime.NumCPU()
+	runtime.GOMAXPROCS(nCPUs)
+	return nCPUs
+}
+
 func importJSONFile(dbg bool, esURL, fileName string) error {
-	var data indexData
-	contents, err := ioutil.ReadFile(fileName)
+	file, err := os.Open(fileName)
 	fatalOnError(err)
-	fatalOnError(json.Unmarshal(contents, &data))
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	lines := [][]byte{}
+	for scanner.Scan() {
+		line := []byte(scanner.Text())
+		lines = append(lines, line)
+	}
+	fatalOnError(err)
+	n := len(lines)
+	fmt.Printf("Processing %d JSONs\n", n)
+	processJSON := func(ch chan struct{}, line []byte) {
+		defer func() {
+			if ch != nil {
+				ch <- struct{}{}
+			}
+		}()
+		var data indexData
+		fatalOnError(json.Unmarshal(line, &data))
+		printf("Processed line length %d\n", len(line))
+	}
+	thrN := getThreadsNum()
+	printf("Using %d CPUs\n", thrN)
+	if thrN > 1 {
+		ch := make(chan struct{})
+		nThreads := 0
+		for _, line := range lines {
+			go processJSON(ch, line)
+			nThreads++
+			if nThreads == thrN {
+				<-ch
+				nThreads--
+			}
+		}
+		for nThreads > 0 {
+			<-ch
+			nThreads--
+		}
+	} else {
+		for _, line := range lines {
+			processJSON(nil, line)
+		}
+	}
 	return nil
 }
 
