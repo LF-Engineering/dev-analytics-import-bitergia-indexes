@@ -317,9 +317,6 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			fatalf("Error: empty index name '%s' or JSON payload: '%s' in '%s'\n", data.Index, string(jsonBytes), string(line))
 			return
 		}
-		if dbg {
-			printf("payload length %d\n", len(jsonBytes))
-		}
 		ok = putJSONData(esURL, data.Index, jsonBytes)
 		if !ok {
 			printf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
