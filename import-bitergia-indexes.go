@@ -181,6 +181,38 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
+func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
+	payloadBody := bytes.NewReader(payloadBytes)
+	method := cPost
+	index = "bitergia-" + index
+	url := fmt.Sprintf("%s/%s/_doc", esURL, index)
+	req, err := http.NewRequest(method, os.ExpandEnv(url), payloadBody)
+	if err != nil {
+		printf("New request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		printf("Do request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != 201 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			printf("ReadAll request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+			return
+		}
+		printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		return
+	}
+	ok = true
+	return
+}
+
 func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) error {
 	file, err := os.Open(fileName)
 	fatalOnError(err)
@@ -197,38 +229,55 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 	fatalOnError(scanner.Err())
 	n := len(lines)
 	printf("Processing %d JSONs\n", n)
-	processJSON := func(ch chan struct{}, line []byte) {
+	processJSON := func(ch chan bool, line []byte) (ok bool) {
 		defer func() {
 			if ch != nil {
-				ch <- struct{}{}
+				ch <- ok
 			}
 		}()
 		var data indexData
 		fatalOnError(json.Unmarshal(line, &data))
-		//printf("Processed line length %d\n", len(line))
+		jsonBytes, err := json.Marshal(data.Source)
+		fatalOnError(err)
+		if data.Index == "" || len(jsonBytes) == 0 {
+			fatalf("Error: empty index name '%s' or JSON payload: '%s' in '%s'\n", data.Index, string(jsonBytes), string(line))
+			return
+		}
+		if dbg {
+			printf("payload length %d\n", len(jsonBytes))
+		}
+		ok = putJSONData(esURL, data.Index, jsonBytes)
+		if !ok {
+			printf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
+		}
+		return
 	}
 	thrN := getThreadsNum()
 	printf("Using %d CPUs\n", thrN)
+	statuses := make(map[bool]int)
+	statuses[false] = 0
+	statuses[true] = 0
 	if thrN > 1 {
-		ch := make(chan struct{})
+		ch := make(chan bool)
 		nThreads := 0
 		for _, line := range lines {
 			go processJSON(ch, line)
 			nThreads++
 			if nThreads == thrN {
-				<-ch
+				statuses[<-ch]++
 				nThreads--
 			}
 		}
 		for nThreads > 0 {
-			<-ch
+			statuses[<-ch]++
 			nThreads--
 		}
 	} else {
 		for _, line := range lines {
-			processJSON(nil, line)
+			statuses[processJSON(nil, line)]++
 		}
 	}
+	printf("Succeeded: %d, failed: %d\n", statuses[true], statuses[false])
 	return nil
 }
 
