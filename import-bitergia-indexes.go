@@ -181,19 +181,22 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
-func importJSONFile(dbg bool, esURL, fileName string) error {
+func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) error {
 	file, err := os.Open(fileName)
 	fatalOnError(err)
 	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
+	// Tweak this if needed
+	buf := make([]byte, 0, maxToken*1024)
+	scanner.Buffer(buf, maxLine*1024)
 	lines := [][]byte{}
 	for scanner.Scan() {
 		line := []byte(scanner.Text())
 		lines = append(lines, line)
 	}
-	fatalOnError(err)
+	fatalOnError(scanner.Err())
 	n := len(lines)
-	fmt.Printf("Processing %d JSONs\n", n)
+	printf("Processing %d JSONs\n", n)
 	processJSON := func(ch chan struct{}, line []byte) {
 		defer func() {
 			if ch != nil {
@@ -202,7 +205,7 @@ func importJSONFile(dbg bool, esURL, fileName string) error {
 		}()
 		var data indexData
 		fatalOnError(json.Unmarshal(line, &data))
-		printf("Processed line length %d\n", len(line))
+		//printf("Processed line length %d\n", len(line))
 	}
 	thrN := getThreadsNum()
 	printf("Using %d CPUs\n", thrN)
@@ -240,13 +243,31 @@ func importJSONFiles(fileNames []string) error {
 		ensureIndex(esURL, "import-bitergia-indexes-log", true)
 		logURL = esURL
 	}
+	mts := os.Getenv("MAX_TOKEN")
+	maxToken := 2
+	if mts != "" {
+		mt, err := strconv.Atoi(os.Getenv("MAX_TOKEN"))
+		fatalOnError(err)
+		if mt > 0 {
+			maxToken = mt
+		}
+	}
+	mls := os.Getenv("MAX_LINE")
+	maxLine := 2048
+	if mls != "" {
+		ml, err := strconv.Atoi(os.Getenv("MAX_LINE"))
+		fatalOnError(err)
+		if ml > 0 {
+			maxLine = ml
+		}
+	}
 	if dbg {
-		printf("Importing %+v into %s, log: %s\n", fileNames, esURL, logURL)
+		printf("Importing %+v into %s, log: %s, token/line size: %d/%d\n", fileNames, esURL, logURL, maxToken, maxLine)
 	}
 	n := len(fileNames)
 	for i, fileName := range fileNames {
 		printf("Importing %d/%d: %s\n", i+1, n, fileName)
-		fatalOnError(importJSONFile(dbg, esURL, fileName))
+		fatalOnError(importJSONFile(dbg, esURL, fileName, maxToken, maxLine))
 	}
 	return nil
 }
