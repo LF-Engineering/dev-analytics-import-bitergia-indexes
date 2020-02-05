@@ -248,7 +248,7 @@ func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
 func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) error {
 	contents, err := ioutil.ReadFile(fileName + ".map")
 	if err != nil {
-		printf("Failed to read mapping file for '%s': %+v\n", fileName, err)
+		printf("Failed to read mapping file for '%s': %+v, it may sometimes work, but please see README.md\n", fileName, err)
 	} else {
 		var iunknown interface{}
 		fatalOnError(json.Unmarshal(contents, &iunknown))
