@@ -257,7 +257,6 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			fatalf("cannot unmarshal %v into list of index mappings\n", iunknown)
 		}
 		for index, mapp := range dta {
-			// fmt.Printf("%s: %v\n", index, mapp)
 			ms, u := mapp.(map[string]interface{})
 			if !u {
 				fatalf("cannot unmarshal %v into mappings (index %s)\n", mapp, index)
@@ -282,6 +281,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			ensureIndex(esURL, "bitergia-"+index, false)
 			ok := putJSONMapping(esURL, index, jsonBytes)
 			if !ok {
+				// TODO: allow mapping failure based on env variable
 				fatalf("Error: failed to put JSON mappings '%s' into index 'bitergia-%s'\n", string(jsonBytes), index)
 			}
 			printf("%s mapping created\n", fileName)
