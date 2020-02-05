@@ -29,3 +29,4 @@ import-bitergia-indexes
 out
 *.json
 *.7z
+*.tar
