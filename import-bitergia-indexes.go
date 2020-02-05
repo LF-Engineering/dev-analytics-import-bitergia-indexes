@@ -181,6 +181,38 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
+func putJSONMapping(esURL, index string, payloadBytes []byte) (ok bool) {
+	payloadBody := bytes.NewReader(payloadBytes)
+	method := cPut
+	index = "bitergia-" + index
+	url := fmt.Sprintf("%s/%s/_mapping", esURL, index)
+	req, err := http.NewRequest(method, os.ExpandEnv(url), payloadBody)
+	if err != nil {
+		printf("New request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		printf("Do request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != 200 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			printf("ReadAll request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+			return
+		}
+		printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		return
+	}
+	ok = true
+	return
+}
+
 func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
 	payloadBody := bytes.NewReader(payloadBytes)
 	method := cPost
@@ -214,6 +246,48 @@ func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
 }
 
 func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) error {
+	contents, err := ioutil.ReadFile(fileName + ".map")
+	if err != nil {
+		printf("Failed to read mapping file for '%s': %+v\n", fileName, err)
+	} else {
+		var iunknown interface{}
+		fatalOnError(json.Unmarshal(contents, &iunknown))
+		dta, u := iunknown.(map[string]interface{})
+		if !u {
+			fatalf("cannot unmarshal %v into list of index mappings\n", iunknown)
+		}
+		for index, mapp := range dta {
+			// fmt.Printf("%s: %v\n", index, mapp)
+			ms, u := mapp.(map[string]interface{})
+			if !u {
+				fatalf("cannot unmarshal %v into mappings (index %s)\n", mapp, index)
+			}
+			m, u := ms["mappings"]
+			if !u {
+				fatalf("no 'mappings' property in %v (index %s)\n", ms, index)
+			}
+			is, u := m.(map[string]interface{})
+			if !u {
+				fatalf("cannot unmarshal %v into items (index %s)\n", m, index)
+			}
+			i, u := is["items"]
+			if !u {
+				i, u = is["item"]
+				if !u {
+					fatalf("no 'items' or 'item' properties in %v (index %s)\n", is, index)
+				}
+			}
+			jsonBytes, err := json.Marshal(i)
+			fatalOnError(err)
+			ensureIndex(esURL, "bitergia-"+index, false)
+			ok := putJSONMapping(esURL, index, jsonBytes)
+			if !ok {
+				fatalf("Error: failed to put JSON mappings '%s' into index 'bitergia-%s'\n", string(jsonBytes), index)
+			}
+			printf("%s mapping created\n", fileName)
+		}
+	}
+
 	file, err := os.Open(fileName)
 	fatalOnError(err)
 	defer func() { _ = file.Close() }()

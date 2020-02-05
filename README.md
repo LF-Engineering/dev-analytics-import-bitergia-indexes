@@ -8,7 +8,7 @@ Import Bitergia ElasticSearch dumps into ES database (prefix them with `bitergia
 
 # Important
 
-When you unzip data files you shoudl have 2 distinct types of JSON files:
+When you unzip data files you should have 2 distinct types of JSON files:
 
 - Actual data files (without `mapping` in their name).
 - Mapping files (containing `mapping` in their name).
