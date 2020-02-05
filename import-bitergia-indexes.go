@@ -20,14 +20,23 @@ func fatalf(f string, a ...interface{}) {
 	fatalOnError(fmt.Errorf(f, a...))
 }
 
-func importJSONfiles(fileNames []string) error {
+func importJSONFile(dbg bool, esURL, fileName string) error {
+	return nil
+}
+
+func importJSONFiles(fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
+	esURL := os.Getenv("ES_URL")
+	if esURL == "" {
+		esURL = "http://localhost:9200"
+	}
 	if dbg {
-		fmt.Printf("Importing %+v\n", fileNames)
+		fmt.Printf("Importing %+v into %s\n", fileNames, esURL)
 	}
 	n := len(fileNames)
 	for i, fileName := range fileNames {
 		fmt.Printf("Importing %d/%d: %s\n", i+1, n, fileName)
+		fatalOnError(importJSONFile(dbg, esURL, fileName))
 	}
 	return nil
 }
@@ -38,7 +47,7 @@ func main() {
 		return
 	}
 	dtStart := time.Now()
-	fatalOnError(importJSONfiles(os.Args[1:len(os.Args)]))
+	fatalOnError(importJSONFiles(os.Args[1:len(os.Args)]))
 	dtEnd := time.Now()
 	fmt.Printf("Time(%s): %v\n", os.Args[0], dtEnd.Sub(dtStart))
 }
