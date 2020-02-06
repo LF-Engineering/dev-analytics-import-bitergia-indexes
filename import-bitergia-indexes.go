@@ -181,7 +181,25 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
-func putJSONMapping(esURL, index string, payloadBytes []byte) (ok bool) {
+func progressInfo(i, n int, start time.Time, last *time.Time, period time.Duration) {
+	now := time.Now()
+	if last.Add(period).Before(now) {
+		perc := 0.0
+		if n > 0 {
+			perc = (float64(i) * 100.0) / float64(n)
+		}
+		eta := start
+		if i > 0 && n > 0 {
+			etaNs := float64(now.Sub(start).Nanoseconds()) * (float64(n) / float64(i))
+			etaDuration := time.Duration(etaNs) * time.Nanosecond
+			eta = start.Add(etaDuration)
+			printf("%d/%d (%.3f%%), ETA: %v\n", i, n, perc, eta)
+		}
+		*last = now
+	}
+}
+
+func putJSONMapping(esURL, index string, payloadBytes []byte, quiet bool) (ok bool) {
 	payloadBody := bytes.NewReader(payloadBytes)
 	method := cPut
 	index = "bitergia-" + index
@@ -206,14 +224,16 @@ func putJSONMapping(esURL, index string, payloadBytes []byte) (ok bool) {
 			printf("ReadAll request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
 			return
 		}
-		printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		if !quiet {
+			printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		}
 		return
 	}
 	ok = true
 	return
 }
 
-func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
+func putJSONData(esURL, index string, payloadBytes []byte, quiet bool) (ok bool) {
 	payloadBody := bytes.NewReader(payloadBytes)
 	method := cPost
 	index = "bitergia-" + index
@@ -238,14 +258,16 @@ func putJSONData(esURL, index string, payloadBytes []byte) (ok bool) {
 			printf("ReadAll request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
 			return
 		}
-		printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		if !quiet {
+			printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		}
 		return
 	}
 	ok = true
 	return
 }
 
-func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) error {
+func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, allowMapFail, allowDataFail bool) error {
 	contents, err := ioutil.ReadFile(fileName + ".map")
 	if err != nil {
 		printf("Failed to read mapping file for '%s': %+v, it may sometimes work, but please see README.md\n", fileName, err)
@@ -279,10 +301,13 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			jsonBytes, err := json.Marshal(i)
 			fatalOnError(err)
 			ensureIndex(esURL, "bitergia-"+index, false)
-			ok := putJSONMapping(esURL, index, jsonBytes)
+			ok := putJSONMapping(esURL, index, jsonBytes, allowMapFail)
 			if !ok {
-				// TODO: allow mapping failure based on env variable
-				fatalf("Error: failed to put JSON mappings '%s' into index 'bitergia-%s'\n", string(jsonBytes), index)
+				if allowMapFail {
+					printf("Failed to put JSON mappings into index 'bitergia-%s' (file %s)\n", index, fileName+".map")
+				} else {
+					fatalf("Error: failed to put JSON mappings '%s' into index 'bitergia-%s'\n", string(jsonBytes), index)
+				}
 			}
 			printf("%s mapping created\n", fileName)
 		}
@@ -317,9 +342,13 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			fatalf("Error: empty index name '%s' or JSON payload: '%s' in '%s'\n", data.Index, string(jsonBytes), string(line))
 			return
 		}
-		ok = putJSONData(esURL, data.Index, jsonBytes)
+		ok = putJSONData(esURL, data.Index, jsonBytes, allowDataFail)
 		if !ok {
-			printf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
+			if allowDataFail {
+				fatalf("Failed to put JSON data into index 'bitergia-%s' (file %s)\n", data.Index, fileName)
+			} else {
+				fatalf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
+			}
 		}
 		return
 	}
@@ -328,6 +357,11 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 	statuses := make(map[bool]int)
 	statuses[false] = 0
 	statuses[true] = 0
+	processed := 0
+	all := len(lines)
+	lastTime := time.Now()
+	dtStart := lastTime
+	freq := time.Duration(30) * time.Second
 	if thrN > 1 {
 		ch := make(chan bool)
 		nThreads := 0
@@ -337,15 +371,21 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 			if nThreads == thrN {
 				statuses[<-ch]++
 				nThreads--
+				processed++
+				progressInfo(processed, all, dtStart, &lastTime, freq)
 			}
 		}
 		for nThreads > 0 {
 			statuses[<-ch]++
 			nThreads--
+			processed++
+			progressInfo(processed, all, dtStart, &lastTime, freq)
 		}
 	} else {
 		for _, line := range lines {
 			statuses[processJSON(nil, line)]++
+			processed++
+			progressInfo(processed, all, dtStart, &lastTime, freq)
 		}
 	}
 	printf("Succeeded: %d, failed: %d\n", statuses[true], statuses[false])
@@ -355,6 +395,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int) err
 func importJSONFiles(fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
 	noLog := os.Getenv("NO_LOG") != ""
+	allowMapFail := os.Getenv("ALLOW_MAP_FAIL") != ""
+	allowDataFail := os.Getenv("ALLOW_DATA_FAIL") != ""
 	esURL := os.Getenv("ES_URL")
 	if esURL == "" {
 		esURL = "http://localhost:9200"
@@ -387,7 +429,7 @@ func importJSONFiles(fileNames []string) error {
 	n := len(fileNames)
 	for i, fileName := range fileNames {
 		printf("Importing %d/%d: %s\n", i+1, n, fileName)
-		fatalOnError(importJSONFile(dbg, esURL, fileName, maxToken, maxLine))
+		fatalOnError(importJSONFile(dbg, esURL, fileName, maxToken, maxLine, allowMapFail, allowDataFail))
 	}
 	return nil
 }
