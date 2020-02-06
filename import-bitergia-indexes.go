@@ -298,7 +298,17 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 					fatalf("no 'items' or 'item' properties in %v (index %s)\n", is, index)
 				}
 			}
-			jsonBytes, err := json.Marshal(i)
+			pl := make(map[string]interface{})
+			mi, u := i.(map[string]interface{})
+			skipKeys := map[string]struct{}{"_all": {}}
+			for k, d := range mi {
+				_, skip := skipKeys[k]
+				if skip {
+					continue
+				}
+				pl[k] = d
+			}
+			jsonBytes, err := json.Marshal(pl)
 			fatalOnError(err)
 			ensureIndex(esURL, "bitergia-"+index, false)
 			ok := putJSONMapping(esURL, index, jsonBytes, allowMapFail)
@@ -328,7 +338,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 	fatalOnError(scanner.Err())
 	n := len(lines)
 	printf("Processing %d JSONs\n", n)
-	processJSON := func(ch chan bool, line []byte) (ok bool) {
+	processJSON := func(ch chan bool, lineNo int, line []byte) (ok bool) {
 		defer func() {
 			if ch != nil {
 				ch <- ok
@@ -345,9 +355,9 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 		ok = putJSONData(esURL, data.Index, jsonBytes, allowDataFail)
 		if !ok {
 			if allowDataFail {
-				printf("Failed to put JSON data into index 'bitergia-%s' (file %s)\n", data.Index, fileName)
+				printf("Failed to put line %d JSON data into index 'bitergia-%s' (file %s)\n", lineNo, data.Index, fileName)
 			} else {
-				fatalf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
+				fatalf("Error: failed to put line %d JSON '%s' into index 'bitergia-%s'\n", lineNo, string(jsonBytes), data.Index)
 			}
 		}
 		return
@@ -365,8 +375,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 	if thrN > 1 {
 		ch := make(chan bool)
 		nThreads := 0
-		for _, line := range lines {
-			go processJSON(ch, line)
+		for lineNo, line := range lines {
+			go processJSON(ch, lineNo, line)
 			nThreads++
 			if nThreads == thrN {
 				statuses[<-ch]++
@@ -382,8 +392,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 			progressInfo(processed, all, dtStart, &lastTime, freq)
 		}
 	} else {
-		for _, line := range lines {
-			statuses[processJSON(nil, line)]++
+		for lineNo, line := range lines {
+			statuses[processJSON(nil, lineNo, line)]++
 			processed++
 			progressInfo(processed, all, dtStart, &lastTime, freq)
 		}
