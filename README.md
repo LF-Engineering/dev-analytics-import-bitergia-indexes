@@ -20,3 +20,9 @@ If there is no mapping for a given JSON file, first document inserted from data 
 It means that if some document is using `1` for float value and there is no mapping, then ES will assign type `int` to that column, so if so latter document uses `1.5` - it will cause error due to attempt to insert `float` value into an `int` column.
 
 This is why each data file should have `.map` file to specify exact types for all its documents columns.
+
+# Correlate
+
+Bitergia export uses the following pattern for their files: data file in `directory/fn_data.json`, map file `directory/fn_mapping.json`.
+
+To update mapping file to `directory/fn_data.json.map` run `./correlate_indices.sh ./directory`.
