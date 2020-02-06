@@ -345,7 +345,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 		ok = putJSONData(esURL, data.Index, jsonBytes, allowDataFail)
 		if !ok {
 			if allowDataFail {
-				fatalf("Failed to put JSON data into index 'bitergia-%s' (file %s)\n", data.Index, fileName)
+				printf("Failed to put JSON data into index 'bitergia-%s' (file %s)\n", data.Index, fileName)
 			} else {
 				fatalf("Error: failed to put JSON '%s' into index 'bitergia-%s'\n", string(jsonBytes), data.Index)
 			}
