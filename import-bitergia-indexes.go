@@ -425,7 +425,7 @@ func importJSONFiles(fileNames []string) error {
 		}
 	}
 	mls := os.Getenv("MAX_LINE")
-	maxLine := 2048
+	maxLine := 16384
 	if mls != "" {
 		ml, err := strconv.Atoi(os.Getenv("MAX_LINE"))
 		fatalOnError(err)
