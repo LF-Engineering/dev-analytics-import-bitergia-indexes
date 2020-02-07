@@ -319,6 +319,7 @@ func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created
 	}
 	esResult := esBulkResult{}
 	fatalOnError(json.Unmarshal(body, &esResult))
+	nItems := len(esResult.Items)
 	for i, item := range esResult.Items {
 		if item.Index.Status == 201 {
 			created++
@@ -326,6 +327,10 @@ func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created
 		}
 		errors = append(errors, fmt.Sprintf("%+v", item.Index.Error))
 		errorLines = append(errorLines, i)
+	}
+	// return critical error if failure rate is > 10%
+	if len(errors) > nItems/10 {
+		criticalError = true
 	}
 	return
 }
@@ -495,12 +500,21 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 		nItems := len(bucket)
 		nCreated, errors, errorLines, criticalError := bulkJSONData(esURL, index, payloads, allowDataFail)
 		if criticalError {
-			printf("Warning: critical bulk failure, fallback to line by line mode for bucket %d\n", bucketNo)
+			nLines := len(bucket)
+			printf("Warning: critical bulk failure, fallback to line by line mode for bucket %d (%d lines)\n", bucketNo, nLines)
+			lastTime := time.Now()
+			dtStart := lastTime
+			freq := time.Duration(5) * time.Second
+			bstat := [2]int{0, 0}
 			for lineNo, line := range bucket {
 				stat := processJSON(nil, bucketNo, lineNo, line)
-				status[0] += stat[0]
-				status[1] += stat[1]
+				bstat[0] += stat[0]
+				bstat[1] += stat[1]
+				progressInfo(lineNo, nLines, dtStart, &lastTime, freq)
 			}
+			status[0] += bstat[0]
+			status[1] += bstat[1]
+			printf("Warning: fallback processed %d lines in %d bucket, success: %d, failed: %d\n", nLines, bucketNo, bstat[0], bstat[1])
 			return
 		}
 		if nCreated != nItems {
@@ -632,7 +646,7 @@ func importJSONFiles(fileNames []string) error {
 		}
 	}
 	bss := os.Getenv("BULK_SIZE")
-	bulkSize := 500
+	bulkSize := 300
 	if bss != "" {
 		bs, err := strconv.Atoi(os.Getenv("BULK_SIZE"))
 		fatalOnError(err)
