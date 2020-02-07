@@ -196,7 +196,7 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
-func progressInfo(i, n int, start time.Time, last *time.Time, period time.Duration) {
+func progressInfo(i, n int, start time.Time, last *time.Time, period time.Duration, msg string) {
 	now := time.Now()
 	if last.Add(period).Before(now) {
 		perc := 0.0
@@ -208,7 +208,7 @@ func progressInfo(i, n int, start time.Time, last *time.Time, period time.Durati
 			etaNs := float64(now.Sub(start).Nanoseconds()) * (float64(n) / float64(i))
 			etaDuration := time.Duration(etaNs) * time.Nanosecond
 			eta = start.Add(etaDuration)
-			printf("%d/%d (%.3f%%), ETA: %v\n", i, n, perc, eta)
+			printf("%d/%d (%.3f%%), ETA: %v: %s\n", i, n, perc, eta, msg)
 		}
 		*last = now
 	}
@@ -505,12 +505,13 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 			lastTime := time.Now()
 			dtStart := lastTime
 			freq := time.Duration(5) * time.Second
+			bucketInfo := fmt.Sprintf("bucket %d", bucketNo)
 			bstat := [2]int{0, 0}
 			for lineNo, line := range bucket {
 				stat := processJSON(nil, bucketNo, lineNo, line)
 				bstat[0] += stat[0]
 				bstat[1] += stat[1]
-				progressInfo(lineNo, nLines, dtStart, &lastTime, freq)
+				progressInfo(lineNo, nLines, dtStart, &lastTime, freq, bucketInfo)
 			}
 			status[0] += bstat[0]
 			status[1] += bstat[1]
@@ -566,7 +567,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 					statuses[false] += status[1]
 					nThreads--
 					processed++
-					progressInfo(processed, all, dtStart, &lastTime, freq)
+					progressInfo(processed, all, dtStart, &lastTime, freq, "buckets")
 				}
 			}
 		} else {
@@ -579,7 +580,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 					statuses[false] += status[1]
 					nThreads--
 					processed++
-					progressInfo(processed, all, dtStart, &lastTime, freq)
+					progressInfo(processed, all, dtStart, &lastTime, freq, "JSONs")
 				}
 			}
 		}
@@ -589,7 +590,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 			statuses[false] += status[1]
 			nThreads--
 			processed++
-			progressInfo(processed, all, dtStart, &lastTime, freq)
+			progressInfo(processed, all, dtStart, &lastTime, freq, "final join")
 		}
 	} else {
 		if bulk {
@@ -598,7 +599,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 				statuses[true] += status[0]
 				statuses[false] += status[1]
 				processed++
-				progressInfo(processed, all, dtStart, &lastTime, freq)
+				progressInfo(processed, all, dtStart, &lastTime, freq, "ST buckets")
 			}
 		} else {
 			for lineNo, line := range lines {
@@ -606,7 +607,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 				statuses[true] += status[0]
 				statuses[false] += status[1]
 				processed++
-				progressInfo(processed, all, dtStart, &lastTime, freq)
+				progressInfo(processed, all, dtStart, &lastTime, freq, "ST JSONs")
 			}
 		}
 	}
