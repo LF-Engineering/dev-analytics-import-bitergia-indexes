@@ -280,7 +280,7 @@ func putJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created 
 	return
 }
 
-func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created int) {
+func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created int, errors []string, errorLines []int) {
 	payloadBody := bytes.NewReader(payloadBytes)
 	method := cPost
 	index = "bitergia-" + index
@@ -314,10 +314,12 @@ func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created
 	esResult := esBulkResult{}
 	fatalOnError(json.Unmarshal(body, &esResult))
 	for i, item := range esResult.Items {
-		fmt.Printf("%d item: %v\n", i, item.Index)
 		if item.Index.Status == 201 {
 			created++
+			continue
 		}
+		errors = append(errors, fmt.Sprintf("%+v", item.Index.Error))
+		errorLines = append(errorLines, i)
 	}
 	return
 }
@@ -448,7 +450,7 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 		status[0] = 1
 		return
 	}
-	processBucket := func(ch chan [2]int, bucket [][]byte) (status [2]int) {
+	processBucket := func(ch chan [2]int, bucketNo int, bucket [][]byte) (status [2]int) {
 		defer func() {
 			if ch != nil {
 				ch <- status
@@ -481,12 +483,22 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 			payloads = append(payloads, newLine...)
 		}
 		nItems := len(bucket)
-		nCreated := bulkJSONData(esURL, index, payloads, allowDataFail)
+		nCreated, errors, errorLines := bulkJSONData(esURL, index, payloads, allowDataFail)
 		if nCreated != nItems {
 			if allowDataFail {
-				printf("Failed to bulk put JSON data into index 'bitergia-%s' (file %s)\n", index, fileName)
+				for idx, lineNo := range errorLines {
+					if dbg {
+						printf("Failed: '%s' on line %d, bucket %d\n", errors[idx], lineNo, bucketNo)
+					} else {
+						printf("Failed: Bucket %d, line %d\n", bucketNo, lineNo)
+					}
+				}
+				printf("Failed %d/%d to bulk put JSON data into index 'bitergia-%s' (file %s)\n", len(errors), nItems, index, fileName)
 			} else {
-				fatalf("Error: failed to bulk put JSON into index 'bitergia-%s'\n", index)
+				for idx, lineNo := range errorLines {
+					printf("Error: '%s'\nOn line %d, bucket %d:\n'%s'\n", errors[idx], lineNo, bucketNo, string(bucket[lineNo]))
+				}
+				fatalf("Error: failed %d/%d to bulk put JSON into index 'bitergia-%s'\n", len(errors), nItems, index)
 			}
 		}
 		status[0] = nCreated
@@ -512,8 +524,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 		ch := make(chan [2]int)
 		nThreads := 0
 		if bulk {
-			for _, bucket := range buckets {
-				go processBucket(ch, bucket)
+			for bucketNo, bucket := range buckets {
+				go processBucket(ch, bucketNo, bucket)
 				nThreads++
 				if nThreads == thrN {
 					status := <-ch
@@ -548,8 +560,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 		}
 	} else {
 		if bulk {
-			for _, bucket := range buckets {
-				status := processBucket(nil, bucket)
+			for bucketNo, bucket := range buckets {
+				status := processBucket(nil, bucketNo, bucket)
 				statuses[true] += status[0]
 				statuses[false] += status[1]
 				processed++
