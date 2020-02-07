@@ -328,8 +328,8 @@ func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created
 		errors = append(errors, fmt.Sprintf("%+v", item.Index.Error))
 		errorLines = append(errorLines, i)
 	}
-	// return critical error if failure rate is > 10%
-	if len(errors) > nItems/10 {
+	// return critical error if failure rate is > 20%
+	if len(errors) > nItems/5 {
 		criticalError = true
 	}
 	return
@@ -648,7 +648,7 @@ func importJSONFiles(fileNames []string) error {
 		}
 	}
 	bss := os.Getenv("BULK_SIZE")
-	bulkSize := 300
+	bulkSize := 1000
 	if bss != "" {
 		bs, err := strconv.Atoi(os.Getenv("BULK_SIZE"))
 		fatalOnError(err)
