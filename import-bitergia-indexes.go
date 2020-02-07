@@ -328,9 +328,10 @@ func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (created
 		errors = append(errors, fmt.Sprintf("%+v", item.Index.Error))
 		errorLines = append(errorLines, i)
 	}
-	// return critical error if failure rate is > 25%
-	if len(errors) > nItems/4 {
-		printf("critical failure rate in bulk update: %d/%d, falling back to line by line mode\n", len(errors), nItems)
+	// return critical error if failure rate is > 10%
+	if len(errors) > nItems/10 {
+		failPerc := (100.0 * float64(len(errors))) / float64(nItems)
+		printf("critical failure rate in bulk update: %d/%d (%f.3%%), falling back to line by line mode\n", len(errors), nItems, failPerc)
 		criticalError = true
 	}
 	return
