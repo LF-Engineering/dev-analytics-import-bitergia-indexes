@@ -610,7 +610,8 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSiz
 			}
 		}
 	}
-	printf("Succeeded: %d, failed: %d\n", statuses[true], statuses[false])
+	percFailed := (100.0 * float64(statuses[false])) / float64(statuses[false]+statuses[true])
+	printf("Succeeded: %d, failed: %d (%.3f%%)\n", statuses[true], statuses[false], percFailed)
 	return nil
 }
 
