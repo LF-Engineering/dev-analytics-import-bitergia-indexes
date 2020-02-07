@@ -267,7 +267,42 @@ func putJSONData(esURL, index string, payloadBytes []byte, quiet bool) (ok bool)
 	return
 }
 
-func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, allowMapFail, allowDataFail bool) error {
+func bulkJSONData(esURL, index string, payloadBytes []byte, quiet bool) (ok bool) {
+	payloadBody := bytes.NewReader(payloadBytes)
+	method := cPost
+	index = "bitergia-" + index
+	//url := fmt.Sprintf("%s/%s/_bulk?refresh=wait_for", esURL, index)
+	url := fmt.Sprintf("%s/%s/_bulk", esURL, index)
+	req, err := http.NewRequest(method, os.ExpandEnv(url), payloadBody)
+	if err != nil {
+		printf("New request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		printf("Do request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+		return
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != 200 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			printf("ReadAll request error: %+v for %s url: %s, payload: %s\n", err, method, url, string(payloadBytes))
+			return
+		}
+		if !quiet {
+			printf("Method:%s url:%s status:%d payload:%+v\n%s\n", method, url, resp.StatusCode, string(payloadBytes), body)
+		}
+		return
+	}
+	ok = true
+	return
+}
+
+func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine, bulkSize int, allowMapFail, allowDataFail bool) error {
 	contents, err := ioutil.ReadFile(fileName + ".map")
 	if err != nil {
 		printf("Failed to read mapping file for '%s': %+v, it may sometimes work, but please see README.md\n", fileName, err)
@@ -331,13 +366,41 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 	buf := make([]byte, 0, maxToken*1024)
 	scanner.Buffer(buf, maxLine*1024)
 	lines := [][]byte{}
+	buckets := [][][]byte{}
+	bucket := [][]byte{}
+	nBuckets := 0
+	bulk := false
+	if bulkSize > 1 {
+		bulk = true
+	}
+	bs := 0
 	for scanner.Scan() {
 		line := []byte(scanner.Text())
 		lines = append(lines, line)
+		if bulk {
+			bucket = append(bucket, line)
+			bs++
+			if bs == bulkSize {
+				buckets = append(buckets, bucket)
+				bucket = [][]byte{}
+				bs = 0
+			}
+		}
+	}
+	if bulk {
+		if bs > 0 {
+			buckets = append(buckets, bucket)
+		}
+		nBuckets = len(buckets)
+		printf("%d buckets up to %d JSONs each\n", nBuckets, bulkSize)
 	}
 	fatalOnError(scanner.Err())
 	n := len(lines)
-	printf("Processing %d JSONs\n", n)
+	if bulk {
+		printf("Processing %d JSONs in %d buckets\n", n, nBuckets)
+	} else {
+		printf("Processing %d JSONs\n", n)
+	}
 	processJSON := func(ch chan bool, lineNo int, line []byte) (ok bool) {
 		defer func() {
 			if ch != nil {
@@ -362,27 +425,87 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 		}
 		return
 	}
+	processBucket := func(ch chan bool, bucket [][]byte) (ok bool) {
+		defer func() {
+			if ch != nil {
+				ch <- ok
+			}
+		}()
+		index := ""
+		bulkOp := []byte("")
+		payloads := []byte{}
+		newLine := []byte("\n")
+		for _, line := range bucket {
+			var data indexData
+			fatalOnError(json.Unmarshal(line, &data))
+			jsonBytes, err := json.Marshal(data.Source)
+			fatalOnError(err)
+			if data.Index == "" || len(jsonBytes) == 0 {
+				fatalf("Error: empty index name '%s' or JSON payload: '%s' in '%s'\n", data.Index, string(jsonBytes), string(line))
+				return
+			}
+			if index == "" {
+				index = data.Index
+				bulkOp = []byte("{\"index\": {\"_index\":\"bitergia-" + index + "\"}}\n")
+				payloads = bulkOp
+			} else {
+				if data.Index != index {
+					fatalf("Error: non unique index '%s' != '%s' in '%s'\n", data.Index, index, string(line))
+				}
+				payloads = append(payloads, bulkOp...)
+			}
+			payloads = append(payloads, jsonBytes...)
+			payloads = append(payloads, newLine...)
+		}
+		ok = bulkJSONData(esURL, index, payloads, allowDataFail)
+		if !ok {
+			if allowDataFail {
+				printf("Failed to bulk put JSON data into index 'bitergia-%s' (file %s)\n", index, fileName)
+			} else {
+				fatalf("Error: failed to bulk put JSON into index 'bitergia-%s'\n", index)
+			}
+		}
+		return
+	}
 	thrN := getThreadsNum()
 	printf("Using %d CPUs\n", thrN)
 	statuses := make(map[bool]int)
 	statuses[false] = 0
 	statuses[true] = 0
 	processed := 0
-	all := len(lines)
+	all := 0
+	if bulk {
+		all = len(buckets)
+	} else {
+		all = len(lines)
+	}
 	lastTime := time.Now()
 	dtStart := lastTime
 	freq := time.Duration(30) * time.Second
 	if thrN > 1 {
 		ch := make(chan bool)
 		nThreads := 0
-		for lineNo, line := range lines {
-			go processJSON(ch, lineNo, line)
-			nThreads++
-			if nThreads == thrN {
-				statuses[<-ch]++
-				nThreads--
-				processed++
-				progressInfo(processed, all, dtStart, &lastTime, freq)
+		if bulk {
+			for _, bucket := range buckets {
+				go processBucket(ch, bucket)
+				nThreads++
+				if nThreads == thrN {
+					statuses[<-ch]++
+					nThreads--
+					processed++
+					progressInfo(processed, all, dtStart, &lastTime, freq)
+				}
+			}
+		} else {
+			for lineNo, line := range lines {
+				go processJSON(ch, lineNo, line)
+				nThreads++
+				if nThreads == thrN {
+					statuses[<-ch]++
+					nThreads--
+					processed++
+					progressInfo(processed, all, dtStart, &lastTime, freq)
+				}
 			}
 		}
 		for nThreads > 0 {
@@ -392,10 +515,18 @@ func importJSONFile(dbg bool, esURL, fileName string, maxToken, maxLine int, all
 			progressInfo(processed, all, dtStart, &lastTime, freq)
 		}
 	} else {
-		for lineNo, line := range lines {
-			statuses[processJSON(nil, lineNo, line)]++
-			processed++
-			progressInfo(processed, all, dtStart, &lastTime, freq)
+		if bulk {
+			for _, bucket := range buckets {
+				statuses[processBucket(nil, bucket)]++
+				processed++
+				progressInfo(processed, all, dtStart, &lastTime, freq)
+			}
+		} else {
+			for lineNo, line := range lines {
+				statuses[processJSON(nil, lineNo, line)]++
+				processed++
+				progressInfo(processed, all, dtStart, &lastTime, freq)
+			}
 		}
 	}
 	printf("Succeeded: %d, failed: %d\n", statuses[true], statuses[false])
@@ -433,13 +564,20 @@ func importJSONFiles(fileNames []string) error {
 			maxLine = ml
 		}
 	}
-	if dbg {
-		printf("Importing %+v into %s, log: %s, token/line size: %d/%d\n", fileNames, esURL, logURL, maxToken, maxLine)
+	bss := os.Getenv("BULK_SIZE")
+	bulkSize := 1000
+	if bss != "" {
+		bs, err := strconv.Atoi(os.Getenv("BULK_SIZE"))
+		fatalOnError(err)
+		if bs > 0 {
+			bulkSize = bs
+		}
 	}
+	printf("Importing %+v into %s, log: %s, token/line/bulk size: %d/%d/%d, allow map/data fail: %v/%v\n", fileNames, esURL, logURL, maxToken, maxLine, bulkSize, allowMapFail, allowDataFail)
 	n := len(fileNames)
 	for i, fileName := range fileNames {
 		printf("Importing %d/%d: %s\n", i+1, n, fileName)
-		fatalOnError(importJSONFile(dbg, esURL, fileName, maxToken, maxLine, allowMapFail, allowDataFail))
+		fatalOnError(importJSONFile(dbg, esURL, fileName, maxToken, maxLine, bulkSize, allowMapFail, allowDataFail))
 	}
 	return nil
 }
