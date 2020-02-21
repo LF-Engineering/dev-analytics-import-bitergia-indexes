@@ -5,6 +5,7 @@ Import Bitergia ElasticSearch dumps into ES database (prefix them with `bitergia
 
 - Start local ES server via: `./es_local_docker.sh`.
 - To import data form Bitergia exported JSON dump files do: `[DEBUG=1] [NO_LOG=1] [ES_URL=...] [MAX_TOKEN=2] [MAX_LINE=16384] [BULK_SIZE=1000] [ALLOW_MAP_FAIL=1] [ALLOW_DATA_FAIL=1] ./import-bitergia-indexes file1.json file2.json ...`
+- Typical usage: `` ES_URL="`cat ~/dev/go/src/github.com/LF-Engineering/sync-data-sources/helm-charts/sds-helm/sds-helm/secrets/ES_URL.prod.secret`" ALLOW_DATA_FAIL=1 ./import-bitergia-indexes cloudfoundry/*.json  oci/*.json  onap/*.json  opnfv/*.json  opnfv-groupsio/*.json  yoctoproject/*.json ``.
 
 # Important
 
